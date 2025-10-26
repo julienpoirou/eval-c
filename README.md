@@ -19,9 +19,16 @@ docker build -t t3c:dev --build-arg APP_ENVIRONMENT=DEVELOPMENT .
 docker run --rm -v "$(pwd)/dictionary:/data:ro" -v "$(pwd)/output:/app/output" t3c:dev -G -i /data/rockyou.txt
 ```
 
+> Il est possible de spécifier un autre algorithme de hash. Par défaut, il s'agit de "md5".
+
 **Rechercher dans les mots de passes fuités en fonction du condensat que l'on passe en STDIN :**
 ```
 docker run --rm -v "$(pwd)/output:/app/output:ro" t3c:dev -L -i /app/output/t3c.csv
+```
+
+**Afficher l'aide :**
+```
+docker run --rm t3c:dev -h
 ```
 
 > CTRL-D pour avoir la réponse.
