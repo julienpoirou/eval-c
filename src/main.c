@@ -15,6 +15,334 @@ typedef struct {
     unsigned int digest_len;
 } row;
 
+
+
+/*
+ IO
+*/
+
+char *read_line(FILE *file) {
+    if (!file) {
+        return NULL;
+    }
+
+    size_t limitWidthChar = 100;
+    size_t numChar = 0;
+
+    // Malloc a line of character
+    char *buffer = malloc(limitWidthChar);
+    if (!buffer) {
+        return NULL;
+    }
+
+    int character;
+
+    // Read characters in line
+    while ((character = fgetc(file)) != EOF) {
+        if (character == '\n') {
+            break;
+        }
+
+        // Check that the string is not too long (without forgetting the '\0').
+        if (numChar + 1 >= limitWidthChar) {
+            while ((character = fgetc(file)) != EOF && character != '\n') {
+            }
+            free(buffer);
+            return NULL;
+        }
+
+        // Add character in line
+        buffer[numChar++] = (char)character;
+    }
+
+    buffer[numChar] = '\0';
+
+    // Check if there are characters
+    if (character == EOF && numChar == 0) {
+        free(buffer);
+        return NULL;
+    }
+
+    return buffer;
+}
+
+int read_lines(const char *path, char ***out_lines, size_t *out_count) {
+    size_t limit_lines = 1000;
+    size_t num_line = 0;
+
+    // Open dictionary
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return 1;
+    }
+
+    // Malloc a table of lines
+    char **buffer_lines = malloc(limit_lines * sizeof(char *));
+    if (!buffer_lines) {
+        fclose(file);
+        return 1;
+    }
+
+    // Add line in table
+    while (true) {
+        if (num_line >= limit_lines) {
+            break;
+        }
+
+        char *line = read_line(file);
+
+        if (!line) {
+            break;
+        }
+
+        buffer_lines[num_line++] = line;
+    }
+
+    // Close dictionary
+    fclose(file);
+
+    *out_lines = buffer_lines;
+    *out_count = num_line;
+    return 0;
+}
+
+int read_stdin_lines(char ***out_lines, size_t *out_count) {
+    if (!out_lines || !out_count) {
+        return 1;
+    }
+
+    const size_t max_lines = 1000;
+
+    // Malloc lines of characters
+    char **buffer = malloc(max_lines * sizeof(*buffer));
+    if (!buffer) {
+        return 1;
+    }
+
+    size_t num_lines = 0;
+    while (true) {
+        if (num_lines >= max_lines) {
+            break;
+        }
+        char *line = read_line(stdin);
+        if (!line) {
+            break;
+        }
+        buffer[num_lines++] = line;
+    }
+    *out_lines = buffer;
+    *out_count = num_lines;
+    return 0;
+}
+
+void free_lines(char **lines, size_t count) {
+    if (!lines) {
+        return;
+    }
+
+    // Free line in table
+    for (size_t i = 0; i < count; ++i) {
+        free((lines)[i]);
+    }
+
+    // Free table
+    free(lines);
+}
+
+
+
+/*
+ CSV
+*/
+
+int write_csv(const char *path, const row *rows, size_t count) {
+    if (!rows) {
+        return 1;
+    }
+
+    // Open CSV
+    FILE *out_csv = fopen(path, "wb");
+    if (!out_csv) {
+        fprintf(stderr, "ERROR: The directory does not exist.\n");
+        return 1;
+    }
+
+    // Write header in CSV
+    fputs("raw,algorithm,digest\n", out_csv);
+
+    // Write informations
+    char hexadecimal[2*EVP_MAX_MD_SIZE+1];
+    for (size_t i = 0; i < count; ++i) {
+        bytes_to_hexadecimal(rows[i].digest, rows[i].digest_len, hexadecimal);
+        fprintf(out_csv, "%s,%s,%s\n", rows[i].raw, rows[i].algorithm, hexadecimal);
+    }
+
+    // Close CSV
+    fclose(out_csv);
+    return 0;
+}
+int load_csv(const char *path, row **out_rows, size_t *out_count) {
+    *out_rows = NULL;
+    *out_count = 0;
+
+    // Open the file in binary mode
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return 1;
+    }
+
+    // Open the file in binary mode
+    const size_t max_lines = 1000;
+    row *rows = calloc(max_lines, sizeof(*rows));
+    if (!rows) {
+        fclose(file);
+        return 1;
+    }
+
+    // Remove header
+    char *first_line = read_line(file);
+    if (first_line) {
+        free(first_line);
+    }
+
+    size_t num_lines = 0;
+
+    while(true) {
+        if (num_lines >= max_lines) {
+            break;
+        }
+
+        char *line = read_line(file);
+        // EOF or error in line
+        if (!line) {
+            break;
+        }
+
+        // Position of ',' on the line
+        char *first_comma = strchr(line, ',');
+        if (!first_comma) {
+            free(line);
+            continue;
+        }
+        char *second_comma = strchr(first_comma + 1, ',');
+        if (!second_comma) {
+            free(line);
+            continue;
+        }
+
+        // Cut into several lines and get the values
+        *first_comma = '\0';
+        *second_comma = '\0';
+        char *raw_str = line;
+        char *algorithm = first_comma + 1;
+        char *hexadecimal = second_comma + 1;
+
+        // Allocate memory to the raw string
+        size_t raw_len = strlen(raw_str);
+        rows[num_lines].raw = malloc(raw_len + 1);
+        if (!rows[num_lines].raw) {
+            free(line);
+            free_table_rows(rows, num_lines);
+            fclose(file);
+            return 1;
+        }
+        memcpy(rows[num_lines].raw, raw_str, raw_len + 1);
+
+        // Push algorithm
+        size_t j = 0;
+        while (j + 1 < sizeof(rows[num_lines].algorithm) && algorithm[j] != '\0') {
+            rows[num_lines].algorithm[j] = algorithm[j];
+            ++j;
+        }
+        rows[num_lines].algorithm[j] = '\0';
+
+        // Push digest bytes
+        unsigned int digest_len = 0;
+        if (hexadecimal_to_bytes(hexadecimal, rows[num_lines].digest, &digest_len) != 0) {
+            free(line);
+            free_table_rows(rows, num_lines);
+            fclose(file);
+            return 1;
+        }
+        rows[num_lines].digest_len = digest_len;
+
+        free(line);
+        num_lines++;
+    }
+
+    fclose(file);
+    *out_rows = rows;
+    *out_count = num_lines;
+    return 0;
+}
+
+
+
+/*
+ App
+*/
+
+int merge_table(const char *algorithm, char **lines, size_t count, row **out_rows, size_t *out_count) {
+
+    // Number of row
+    size_t nb_row = 0;
+
+    // Create table of rows
+    row *table = calloc(count, sizeof(*table));
+    if (!table) {
+        return 1;
+    }
+
+    // Create table of rows
+    for (size_t i = 0; i < count; ++i) {
+        // Get raw for the structure
+        char *line = lines[i];
+        if (!line) {
+            continue;
+        }
+
+        // Push raw
+        table[nb_row].raw = line;
+
+        // Push algorithm
+        size_t j = 0;
+        while (j + 1 < sizeof(table[nb_row].algorithm) && algorithm[j] != '\0') {
+            table[nb_row].algorithm[j] = algorithm[j];
+            ++j;
+        }
+        table[nb_row].algorithm[j] = '\0';
+
+        // Calculate and push digest
+        if (calculate_digest(algorithm, line, table[nb_row].digest, &table[nb_row].digest_len) != 0) {
+            free(table);
+            return 1;
+        }
+
+        nb_row++;
+    }
+
+    *out_rows = table;
+    *out_count = nb_row;
+    return 0;
+}
+
+void free_table(row *rows) {
+    free(rows);
+}
+
+void free_table_rows(row *rows, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        free(rows[i].raw);
+    }
+    free(rows);
+}
+
+
+
+/*
+ Hash
+*/
+
 // Conversion of digest bytes to digest hexadecimal
 static void bytes_to_hexadecimal(const unsigned char *digest, unsigned int len_digest, char *out_hexadecimal) {
     // Conversion table
@@ -115,324 +443,11 @@ static int calculate_digest(const char *algorithm, const char *line, unsigned ch
     return 0;
 }
 
-char *read_line(FILE *file) {
-    if (!file) {
-        return NULL;
-    }
 
-    size_t limitWidthChar = 100;
-    size_t numChar = 0;
 
-    // Malloc a line of character
-    char *buffer = malloc(limitWidthChar);
-    if (!buffer) {
-        return NULL;
-    }
-
-    int character;
-
-    // Read characters in line
-    while ((character = fgetc(file)) != EOF) {
-        if (character == '\n') {
-            break;
-        }
-
-        // Check that the string is not too long (without forgetting the '\0').
-        if (numChar + 1 >= limitWidthChar) {
-            while ((character = fgetc(file)) != EOF && character != '\n') {
-            }
-            free(buffer);
-            return NULL;
-        }
-
-        // Add character in line
-        buffer[numChar++] = (char)character;
-    }
-
-    buffer[numChar] = '\0';
-
-    // Check if there are characters
-    if (character == EOF && numChar == 0) {
-        free(buffer);
-        return NULL;
-    }
-
-    return buffer;
-}
-
-int read_lines(const char *path, char ***out_lines, size_t *out_count) {
-    size_t limit_lines = 1000;
-    size_t num_line = 0;
-
-    // Open dictionary
-    FILE *file = fopen(path, "rb");
-    if (!file) {
-        return 1;
-    }
-
-    // Malloc a table of lines
-    char **buffer_lines = malloc(limit_lines * sizeof(char *));
-    if (!buffer_lines) {
-        fclose(file);
-        return 1;
-    }
-
-    // Add line in table
-    while (true) {
-        if (num_line >= limit_lines) {
-            break;
-        }
-
-        char *line = read_line(file);
-
-        if (!line) {
-            break;
-        }
-
-        buffer_lines[num_line++] = line;
-    }
-
-    // Close dictionary
-    fclose(file);
-
-    *out_lines = buffer_lines;
-    *out_count = num_line;
-    return 0;
-}
-
-void free_lines(char **lines, size_t count) {
-    if (!lines) {
-        return;
-    }
-
-    // Free line in table
-    for (size_t i = 0; i < count; ++i) {
-        free((lines)[i]);
-    }
-
-    // Free table
-    free(lines);
-}
-
-int merge_table(const char *algorithm, char **lines, size_t count, row **out_rows, size_t *out_count) {
-
-    // Number of row
-    size_t nb_row = 0;
-
-    // Create table of rows
-    row *table = calloc(count, sizeof(*table));
-    if (!table) {
-        return 1;
-    }
-
-    // Create table of rows
-    for (size_t i = 0; i < count; ++i) {
-        // Get raw for the structure
-        char *line = lines[i];
-        if (!line) {
-            continue;
-        }
-
-        // Push raw
-        table[nb_row].raw = line;
-
-        // Push algorithm
-        size_t j = 0;
-        while (j + 1 < sizeof(table[nb_row].algorithm) && algorithm[j] != '\0') {
-            table[nb_row].algorithm[j] = algorithm[j];
-            ++j;
-        }
-        table[nb_row].algorithm[j] = '\0';
-
-        // Calculate and push digest
-        if (calculate_digest(algorithm, line, table[nb_row].digest, &table[nb_row].digest_len) != 0) {
-            free(table);
-            return 1;
-        }
-
-        nb_row++;
-    }
-
-    *out_rows = table;
-    *out_count = nb_row;
-    return 0;
-}
-
-int write_csv(const char *path, const row *rows, size_t count) {
-    if (!rows) {
-        return 1;
-    }
-
-    // Open CSV
-    FILE *out_csv = fopen(path, "wb");
-    if (!out_csv) {
-        fprintf(stderr, "ERROR: The directory does not exist.\n");
-        return 1;
-    }
-
-    // Write header in CSV
-    fputs("raw,algorithm,digest\n", out_csv);
-
-    // Write informations
-    char hexadecimal[2*EVP_MAX_MD_SIZE+1];
-    for (size_t i = 0; i < count; ++i) {
-        bytes_to_hexadecimal(rows[i].digest, rows[i].digest_len, hexadecimal);
-        fprintf(out_csv, "%s,%s,%s\n", rows[i].raw, rows[i].algorithm, hexadecimal);
-    }
-
-    // Close CSV
-    fclose(out_csv);
-    return 0;
-}
-
-void free_table(row *rows) {
-    free(rows);
-}
-
-void free_table_rows(row *rows, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        free(rows[i].raw);
-    }
-    free(rows);
-}
-
-int load_csv(const char *path, row **out_rows, size_t *out_count) {
-    *out_rows = NULL;
-    *out_count = 0;
-
-    // Open the file in binary mode
-    FILE *file = fopen(path, "rb");
-    if (!file) {
-        return 1;
-    }
-
-    // Open the file in binary mode
-    const size_t max_lines = 1000;
-    row *rows = calloc(max_lines, sizeof(*rows));
-    if (!rows) {
-        fclose(file);
-        return 1;
-    }
-
-    // Remove header
-    char *first_line = read_line(file);
-    if (first_line) {
-        free(first_line);
-    }
-
-    size_t num_lines = 0;
-
-    while(true) {
-        if (num_lines >= max_lines) {
-            break;
-        }
-
-        char *line = read_line(file);
-        // EOF or error in line
-        if (!line) {
-            break;
-        }
-
-        // Position of ',' on the line
-        char *first_comma = strchr(line, ',');
-        if (!first_comma) {
-            free(line);
-            continue;
-        }
-        char *second_comma = strchr(first_comma + 1, ',');
-        if (!second_comma) {
-            free(line);
-            continue;
-        }
-
-        // Cut into several lines and get the values
-        *first_comma = '\0';
-        *second_comma = '\0';
-        char *raw_str = line;
-        char *algorithm = first_comma + 1;
-        char *hexadecimal = second_comma + 1;
-
-        // Allocate memory to the raw string
-        size_t raw_len = strlen(raw_str);
-        rows[num_lines].raw = malloc(raw_len + 1);
-        if (!rows[num_lines].raw) {
-            free(line);
-            free_table_rows(rows, num_lines);
-            fclose(file);
-            return 1;
-        }
-        memcpy(rows[num_lines].raw, raw_str, raw_len + 1);
-
-        // Push algorithm
-        size_t j = 0;
-        while (j + 1 < sizeof(rows[num_lines].algorithm) && algorithm[j] != '\0') {
-            rows[num_lines].algorithm[j] = algorithm[j];
-            ++j;
-        }
-        rows[num_lines].algorithm[j] = '\0';
-
-        // Push digest bytes
-        unsigned int digest_len = 0;
-        if (hexadecimal_to_bytes(hexadecimal, rows[num_lines].digest, &digest_len) != 0) {
-            free(line);
-            free_table_rows(rows, num_lines);
-            fclose(file);
-            return 1;
-        }
-        rows[num_lines].digest_len = digest_len;
-
-        free(line);
-        num_lines++;
-    }
-
-    fclose(file);
-    *out_rows = rows;
-    *out_count = num_lines;
-    return 0;
-}
-
-int read_stdin_lines(char ***out_lines, size_t *out_count) {
-    if (!out_lines || !out_count) {
-        return 1;
-    }
-
-    const size_t max_lines = 1000;
-
-    // Malloc lines of characters
-    char **buffer = malloc(max_lines * sizeof(*buffer));
-    if (!buffer) {
-        return 1;
-    }
-
-    size_t num_lines = 0;
-    while (true) {
-        if (num_lines >= max_lines) {
-            break;
-        }
-        char *line = read_line(stdin);
-        if (!line) {
-            break;
-        }
-        buffer[num_lines++] = line;
-    }
-    *out_lines = buffer;
-    *out_count = num_lines;
-    return 0;
-}
-
-static void print_help(const char *BASENAME) {
-    fprintf(stderr,
-            "Usage:\n"
-            "  %s -G -i <dictionary.txt> [-a <algorithm>]\n"
-            "  %s -L -i <dictionary.txt> [-a <algorithm>]\n"
-            "Options:\n"
-            "  -h, --help\n"
-            "  -G, --generate\n"
-            "  -L, --lookup\n"
-            "  -i, --input <file.txt>\n"
-            "  -a, --algorithm <md5|sha1|sha256>\n",
-            BASENAME, BASENAME);
-}
+/*
+ Main
+*/
 
 static int lookup_matches(const row *rows, size_t num_rows, const char *hex_query) {
     unsigned char querie_digest[EVP_MAX_MD_SIZE];
@@ -452,6 +467,20 @@ static int lookup_matches(const row *rows, size_t num_rows, const char *hex_quer
         }
     }
     return found ? 0 : 2;
+}
+
+static void print_help(const char *BASENAME) {
+    fprintf(stderr,
+            "Usage:\n"
+            "  %s -G -i <dictionary.txt> [-a <algorithm>]\n"
+            "  %s -L -i <dictionary.txt> [-a <algorithm>]\n"
+            "Options:\n"
+            "  -h, --help\n"
+            "  -G, --generate\n"
+            "  -L, --lookup\n"
+            "  -i, --input <file.txt>\n"
+            "  -a, --algorithm <md5|sha1|sha256>\n",
+            BASENAME, BASENAME);
 }
 
 int main(int argc, char *argv[]) {
