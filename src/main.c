@@ -18,6 +18,172 @@ typedef struct {
 
 
 /*
+ Hash
+*/
+
+// Conversion of digest bytes to digest hexadecimal
+static void bytes_to_hexadecimal(const unsigned char *digest, unsigned int len_digest, char *out_hexadecimal) {
+    // Conversion table
+    static const char table[] = "0123456789abcdef";
+    // Converts bytes to hexadecimal
+    for (unsigned int i = 0; i < len_digest; ++i) {
+        // 4 first bits
+        out_hexadecimal[2*i]   = table[(digest[i] >> 4) & 0xF];
+        // 4 second bits
+        out_hexadecimal[2*i+1] = table[digest[i] & 0xF];
+    }
+    out_hexadecimal[2*len_digest] = '\0';
+}
+
+// Conversion of digest hexadecimal to digest bytes
+static int hexadecimal_to_bytes(const char *hexadecimal, unsigned char *out_digest, unsigned int *out_len) {
+    size_t len_hexadecimal = strlen(hexadecimal);
+    if (len_hexadecimal == 0) {
+        fprintf(stderr, "ERROR: Digest is empty.\n");
+        return 1;
+    }
+
+    // Converts hexadecimal to bytes
+    unsigned int num_bytes = 0;
+    for (size_t i = 0; i < len_hexadecimal; i += 2) {
+        int first_char_hexa;
+        int second_char_hexa;
+
+        // First part of hexadecimal
+        int first_char = hexadecimal[i];
+        // Convert to hexadecimal
+        if (first_char >= '0' && first_char <= '9') {
+            first_char_hexa = first_char - '0';
+        } else if (first_char >= 'a' && first_char <= 'f') {
+            first_char_hexa = first_char - 'a' + 10;
+        } else if (first_char >= 'A' && first_char <= 'F') {
+            first_char_hexa = first_char - 'A' + 10;
+        }
+
+        // Second part of hexadecimal
+        int second_char = hexadecimal[i+1];
+        // Convert to hexadecimal
+        if (second_char >= '0' && second_char <= '9') {
+            second_char_hexa = second_char - '0';
+        } else if (second_char >= 'a' && second_char <= 'f') {
+            second_char_hexa = second_char - 'a' + 10;
+        } else if (second_char >= 'A' && second_char <= 'F') {
+            second_char_hexa = second_char - 'A' + 10;
+        }
+
+        // Merge byte
+        out_digest[num_bytes++] = (unsigned char)((first_char_hexa << 4) | second_char_hexa);
+    }
+
+    *out_len = num_bytes;
+    return 0;
+}
+
+// Calculate digest of string
+static int calculate_digest(const char *algorithm, const char *line, unsigned char *out_digest, unsigned int *out_digest_len) {
+    // Get structure of the algorithm
+    const EVP_MD *algorithm_struct = EVP_get_digestbyname(algorithm);
+    if (!algorithm_struct) {
+        fprintf(stderr, "ERROR: Unsupported algorithms.\n");
+        return 1;
+    }
+
+    // Get structure of the algorithm
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    if (!context) {
+        fprintf(stderr, "ERROR: Contexte failed.\n");
+        return 1;
+    }
+
+    // Init context with algorithm
+    if (EVP_DigestInit_ex(context, algorithm_struct, NULL) != 1) {
+        fprintf(stderr, "ERROR: Adding the algorithm to context failed.\n");
+        EVP_MD_CTX_free(context);
+        return 1;
+    }
+
+    // Add string to hash
+    if (EVP_DigestUpdate(context, line, strlen(line)) != 1) {
+        fprintf(stderr, "ERROR: Adding the string to context failed.\n");
+        EVP_MD_CTX_free(context);
+        return 1;
+    }
+
+    // Hash the string
+    if (EVP_DigestFinal_ex(context, out_digest, out_digest_len) != 1) {
+        fprintf(stderr, "ERROR: Hash failed.\n");
+        EVP_MD_CTX_free(context);
+        return 1;
+    }
+
+    EVP_MD_CTX_free(context);
+    return 0;
+}
+
+
+
+/*
+ App
+*/
+
+int merge_table(const char *algorithm, char **lines, size_t count, row **out_rows, size_t *out_count) {
+
+    // Number of row
+    size_t nb_row = 0;
+
+    // Create table of rows
+    row *table = calloc(count, sizeof(*table));
+    if (!table) {
+        return 1;
+    }
+
+    // Create table of rows
+    for (size_t i = 0; i < count; ++i) {
+        // Get raw for the structure
+        char *line = lines[i];
+        if (!line) {
+            continue;
+        }
+
+        // Push raw
+        table[nb_row].raw = line;
+
+        // Push algorithm
+        size_t j = 0;
+        while (j + 1 < sizeof(table[nb_row].algorithm) && algorithm[j] != '\0') {
+            table[nb_row].algorithm[j] = algorithm[j];
+            ++j;
+        }
+        table[nb_row].algorithm[j] = '\0';
+
+        // Calculate and push digest
+        if (calculate_digest(algorithm, line, table[nb_row].digest, &table[nb_row].digest_len) != 0) {
+            free(table);
+            return 1;
+        }
+
+        nb_row++;
+    }
+
+    *out_rows = table;
+    *out_count = nb_row;
+    return 0;
+}
+
+void free_table(row *rows) {
+    free(rows);
+}
+
+void free_table_rows(row *rows, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        free(rows[i].raw);
+    }
+    free(rows);
+}
+
+
+
+/*
  IO
 */
 
@@ -273,173 +439,6 @@ int load_csv(const char *path, row **out_rows, size_t *out_count) {
     fclose(file);
     *out_rows = rows;
     *out_count = num_lines;
-    return 0;
-}
-
-
-
-/*
- App
-*/
-
-int merge_table(const char *algorithm, char **lines, size_t count, row **out_rows, size_t *out_count) {
-
-    // Number of row
-    size_t nb_row = 0;
-
-    // Create table of rows
-    row *table = calloc(count, sizeof(*table));
-    if (!table) {
-        return 1;
-    }
-
-    // Create table of rows
-    for (size_t i = 0; i < count; ++i) {
-        // Get raw for the structure
-        char *line = lines[i];
-        if (!line) {
-            continue;
-        }
-
-        // Push raw
-        table[nb_row].raw = line;
-
-        // Push algorithm
-        size_t j = 0;
-        while (j + 1 < sizeof(table[nb_row].algorithm) && algorithm[j] != '\0') {
-            table[nb_row].algorithm[j] = algorithm[j];
-            ++j;
-        }
-        table[nb_row].algorithm[j] = '\0';
-
-        // Calculate and push digest
-        if (calculate_digest(algorithm, line, table[nb_row].digest, &table[nb_row].digest_len) != 0) {
-            free(table);
-            return 1;
-        }
-
-        nb_row++;
-    }
-
-    *out_rows = table;
-    *out_count = nb_row;
-    return 0;
-}
-
-void free_table(row *rows) {
-    free(rows);
-}
-
-void free_table_rows(row *rows, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        free(rows[i].raw);
-    }
-    free(rows);
-}
-
-
-
-/*
- Hash
-*/
-
-// Conversion of digest bytes to digest hexadecimal
-static void bytes_to_hexadecimal(const unsigned char *digest, unsigned int len_digest, char *out_hexadecimal) {
-    // Conversion table
-    static const char table[] = "0123456789abcdef";
-    // Converts bytes to hexadecimal
-    for (unsigned int i = 0; i < len_digest; ++i) {
-        // 4 first bits
-        out_hexadecimal[2*i]   = table[(digest[i] >> 4) & 0xF];
-        // 4 second bits
-        out_hexadecimal[2*i+1] = table[digest[i] & 0xF];
-    }
-    out_hexadecimal[2*len_digest] = '\0';
-}
-
-// Conversion of digest hexadecimal to digest bytes
-static int hexadecimal_to_bytes(const char *hexadecimal, unsigned char *out_digest, unsigned int *out_len) {
-    size_t len_hexadecimal = strlen(hexadecimal);
-    if (len_hexadecimal == 0) {
-        fprintf(stderr, "ERROR: Digest is empty.\n");
-        return 1;
-    }
-
-    // Converts hexadecimal to bytes
-    unsigned int num_bytes = 0;
-    for (size_t i = 0; i < len_hexadecimal; i += 2) {
-        int first_char_hexa;
-        int second_char_hexa;
-
-        // First part of hexadecimal
-        int first_char = hexadecimal[i];
-        // Convert to hexadecimal
-        if (first_char >= '0' && first_char <= '9') {
-            first_char_hexa = first_char - '0';
-        } else if (first_char >= 'a' && first_char <= 'f') {
-            first_char_hexa = first_char - 'a' + 10;
-        } else if (first_char >= 'A' && first_char <= 'F') {
-            first_char_hexa = first_char - 'A' + 10;
-        }
-
-        // Second part of hexadecimal
-        int second_char = hexadecimal[i+1];
-        // Convert to hexadecimal
-        if (second_char >= '0' && second_char <= '9') {
-            second_char_hexa = second_char - '0';
-        } else if (second_char >= 'a' && second_char <= 'f') {
-            second_char_hexa = second_char - 'a' + 10;
-        } else if (second_char >= 'A' && second_char <= 'F') {
-            second_char_hexa = second_char - 'A' + 10;
-        }
-
-        // Merge byte
-        out_digest[num_bytes++] = (unsigned char)((first_char_hexa << 4) | second_char_hexa);
-    }
-
-    *out_len = num_bytes;
-    return 0;
-}
-
-
-// Calculate digest of string
-static int calculate_digest(const char *algorithm, const char *line, unsigned char *out_digest, unsigned int *out_digest_len) {
-    // Get structure of the algorithm
-    const EVP_MD *algorithm_struct = EVP_get_digestbyname(algorithm);
-    if (!algorithm_struct) {
-        fprintf(stderr, "ERROR: Unsupported algorithms.\n");
-        return 1;
-    }
-
-    // Get structure of the algorithm
-    EVP_MD_CTX *context = EVP_MD_CTX_new();
-    if (!context) {
-        fprintf(stderr, "ERROR: Contexte failed.\n");
-        return 1;
-    }
-
-    // Init context with algorithm
-    if (EVP_DigestInit_ex(context, algorithm_struct, NULL) != 1) {
-        fprintf(stderr, "ERROR: Adding the algorithm to context failed.\n");
-        EVP_MD_CTX_free(context);
-        return 1;
-    }
-
-    // Add string to hash
-    if (EVP_DigestUpdate(context, line, strlen(line)) != 1) {
-        fprintf(stderr, "ERROR: Adding the string to context failed.\n");
-        EVP_MD_CTX_free(context);
-        return 1;
-    }
-
-    // Hash the string
-    if (EVP_DigestFinal_ex(context, out_digest, out_digest_len) != 1) {
-        fprintf(stderr, "ERROR: Hash failed.\n");
-        EVP_MD_CTX_free(context);
-        return 1;
-    }
-
-    EVP_MD_CTX_free(context);
     return 0;
 }
 
