@@ -11,27 +11,6 @@
 - Générer un csv depuis un dictionnaire `.txt` avec le mode generate.
 - Rechercher des mots de passe en se basant sur les condensats avec le mode lookup (arbre binaire de recherche).
 
-## Fonctionnement
-
-```mermaid
-flowchart LR
-  subgraph Generate [-G / --generate]
-    A[Dictionary (.txt)] -- lignes --> B[merge_table(algorithm)]
-    B -- OpenSSL EVP --> C((Table en RAM))
-    C --> D[write_csv]
-    D --> E[/app/output/t3c.csv/]
-  end
-
-  subgraph Lookup [-L / --lookup]
-    E --> F[load_csv]
-    F --> G[(BST: tree_build)]
-    H[STDIN: condensat(s)] --> I[hexadecimal_to_bytes]
-    I --> J{tree_find}
-    J -- match --> K[print raw]
-    J -- miss --> L[(silence)]
-  end
-```
-
 ## Build
 
 ```bash
