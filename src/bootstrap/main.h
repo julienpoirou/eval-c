@@ -1,5 +1,5 @@
-#ifndef COMMON_H
-#define COMMON_H
+#ifndef HEADER_MAIN
+#define HEADER_MAIN
 
 #if !defined(__linux__)
 #  error "This program compiles only on a Linux operating system."

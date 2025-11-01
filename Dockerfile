@@ -17,33 +17,10 @@ ENV APP_ENVIRONMENT=${APP_ENVIRONMENT}
 # Build application
 RUN make
 
-##############
-# Stage: Run #
-##############
-FROM debian:trixie
-
-# Application directory
-WORKDIR /app
-
-# OCI (Open Container Initiative) standard
-LABEL org.opencontainers.image.title="T3C" \
-      org.opencontainers.image.description="Tool for Chain-Condensate Correspondence" \
-      org.opencontainers.image.documentation="https://github.com/julienpoirou/eval-c/blob/main/README.md" \
-      org.opencontainers.image.version="v0.1.0" \
-      org.opencontainers.image.authors="Julien Poirou <julienpoirou@protonmail.com>" \
-      org.opencontainers.image.source="https://github.com/julienpoirou/eval-c"
-
-# Create a no-root user
-RUN mkdir -p /app/output \
-    && groupadd -r -g 1000 app \
-    && useradd -r -u 1000 -g 1000 -s /usr/sbin/nologin -d /app app \
-    && chown app:app /app/output
+#################
+# Stage: Export #
+#################
+FROM scratch AS export
 
 # Get the compiled version of the application
-COPY --from=build --chown=app:app --chmod=0755 /app/bin/t3c /app/bin/t3c
-
-# No-root user
-USER app:app
-
-# Run the application
-ENTRYPOINT ["/app/bin/t3c"]
+COPY --from=build --chmod=0755 /app/bin/t3c /bin/t3c
